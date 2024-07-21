@@ -17,16 +17,66 @@ python main.py
 docker build -t literg/aiocomfoconnect-to-mqtt:0.1.0 .
 ```
 
+### Building for multiple platforms
+
+```shell
+docker buildx create --name multi-arch --platform "linux/arm64,linux/amd64,linux/arm/v7" --driver "docker-container"
+docker buildx use multi-arch
+docker buildx build --platform "linux/amd64,linux/arm64,linux/arm/v7" --tag literg/aiocomfoconnect-to-mqtt:0.1.0 .
+```
+
 ## Publishing docker image
 
 ```shell
 docker push literg/aiocomfoconnect-to-mqtt:0.1.0
 ```
 
+### Publishing for multiple platforms
+
+```shell
+docker buildx build --platform "linux/amd64,linux/arm64,linux/arm/v7" --tag literg/aiocomfoconnect-to-mqtt:0.1.0 --push .
+```
+
 ## Running as docker image
 
 ```shell
 docker run -e COMFO_HOST=10.0.0.2 -e COMFO_PIN=<comfo pin> -e MQTT_HOST=10.0.0.1  literg/aiocomfoconnect-to-mqtt:0.1.0
+```
+
+## Running docker image as systemd service
+
+Create file `/etc/systemd/system/comfo2mqtt.service`
+
+```
+[Unit]
+Description=aiocomfoconnect-to-mqtt
+After=docker.service
+Requires=docker.service
+
+[Service]
+TimeoutStartSec=0
+Restart=always
+ExecStartPre=-/usr/bin/docker stop %n
+ExecStartPre=-/usr/bin/docker rm %n
+ExecStartPre=/usr/bin/docker pull literg/aiocomfoconnect-to-mqtt:0.1.0
+ExecStart=/usr/bin/docker run -e COMFO_HOST=10.0.0.2 -e COMFO_PIN=<comfo pin> -e MQTT_HOST=10.0.0.1 --rm --name %n literg/aiocomfoconnect-to-mqtt:0.1.0
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Execute
+
+```shell
+sudo systemctl daemon-reload
+sudo systemctl start comfo2mqtt.service
+sudo systemctl enable comfo2mqtt.service
+```
+
+Logs
+
+```shell
+sudo journalctl -u comfo2mqtt.service
 ```
 
 ## Sensor channels
