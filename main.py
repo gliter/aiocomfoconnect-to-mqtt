@@ -4,7 +4,12 @@ import os
 import sys
 import time
 
+from aiocomfoconnect.const import VentilationSpeed, VentilationTemperatureProfile
+
+LOGLEVEL = os.environ.get('LOGLEVEL', 'INFO').upper()
 logger = logging.getLogger('aiocomfoconnect-to-mqtt')
+logger.setLevel(LOGLEVEL)
+logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 from aiocomfoconnect import discover_bridges, ComfoConnect
 from aiocomfoconnect.__main__ import run_register
@@ -57,19 +62,32 @@ class Bridge:
         self.last_update = None
         self._loop = asyncio.get_running_loop()
 
+        self.speed_map = {
+            0: VentilationSpeed.AWAY,
+            1: VentilationSpeed.LOW,
+            2: VentilationSpeed.MEDIUM,
+            3: VentilationSpeed.HIGH,
+        }
+
+        self.temperature_profile_map = {
+            0: VentilationTemperatureProfile.NORMAL,
+            1: VentilationTemperatureProfile.COOL,
+            2: VentilationTemperatureProfile.WARM,
+        }
+
         self.cmnd_to_function_mapping = {
             # auto / manual
-            MQTT_CMD_TOPIC + '/mode': lambda value: self.comfoconnect.set_mode(value),
-            # away / low / medium / high
-            MQTT_CMD_TOPIC + '/speed': lambda value: self.comfoconnect.set_speed(value),
+            MQTT_CMD_TOPIC + '/mode': lambda value: self.get_comfoconnect().set_mode(value),
+            # 0 - away / 1 - low / 2 - medium / 3 - high
+            MQTT_CMD_TOPIC + '/speed': lambda value: self.get_comfoconnect().set_speed(self.speed_map[int(value)]),
             # auto / off
-            MQTT_CMD_TOPIC + '/comfocool': lambda value: self.comfoconnect.set_comfocool_mode(value),
-            # warm / normal / cool
-            MQTT_CMD_TOPIC + '/temperature-profile': lambda value: self.comfoconnect.set_temperature_profile(value),
+            MQTT_CMD_TOPIC + '/comfocool': lambda value: self.get_comfoconnect().set_comfocool_mode(value),
+            # 0 - normal / 1 - cool / 2 - warm
+            MQTT_CMD_TOPIC + '/temperature-profile': lambda value: self.get_comfoconnect().set_temperature_profile(self.temperature_profile_map[int(value)]),
             # seconds
-            MQTT_CMD_TOPIC + '/bypass': lambda value: self.comfoconnect.set_bypass('auto' if int(value) == 0 else 'on', int(value)),
+            MQTT_CMD_TOPIC + '/bypass': lambda value: self.get_comfoconnect().set_bypass('auto' if int(value) == 0 else 'on', int(value)),
             # seconds
-            MQTT_CMD_TOPIC + '/boost': lambda value: self.comfoconnect.set_boost(False if int(value) == 0 else True, int(value)),
+            MQTT_CMD_TOPIC + '/boost': lambda value: self.get_comfoconnect().set_boost(False if int(value) == 0 else True, int(value)),
         }
 
     async def connect_to_mqtt(self):
@@ -126,20 +144,27 @@ class Bridge:
             while True:
                 last_update_delta = (time.time() - self.last_update) if self.last_update is not None else 'Unknown'
                 logger.info("Seconds since last update %s", last_update_delta)
+                logger.info("Is connected? %s", self.get_comfoconnect().is_connected())
                 await asyncio.sleep(10)
                 try:
-                    await self.comfoconnect.cmd_time_request()
+                    await self.get_comfoconnect().cmd_time_request()
                 except Exception as e:
                     logger.error("Error whiele sending keepalive %s", e)
-                try:
-                    if self.last_update and time.time() - self.last_update > 15:
-                        logger.warning('No update since %s. Reconnecting', last_update_delta)
+                if self.last_update and time.time() - self.last_update > 15:
+                    logger.warning('No update since %s. Reconnecting', last_update_delta)
+                    try:
                         await self.disconnect_from_comfo()
+                    except Exception as e:
+                        logger.error("Error while disconnecting. %s", e)
+                    try:
                         await self.connect_to_comfo()
-                except Exception as e:
-                    logger.error("Error while reconnecting. %s", e)
+                    except Exception as e:
+                        logger.error("Error while reconnecting. %s", e)
 
         await self._loop.create_task(_reconnect_loop())
+
+    def get_comfoconnect(self):
+        return self.comfoconnect
 
 
 async def main():
@@ -157,9 +182,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    logger.setLevel('INFO')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    logging.basicConfig(filename='comfo-to-mqtt.log', encoding='utf-8', level=logging.DEBUG)
+
 
     logger.info('Sensor to channel mapping: %s', SENSOR_TO_CHANNEL)
 
