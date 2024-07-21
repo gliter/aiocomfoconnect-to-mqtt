@@ -1,0 +1,2 @@
+aiocomfoconnect == 0.1.12
+gmqtt
